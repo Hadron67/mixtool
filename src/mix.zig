@@ -111,7 +111,7 @@ pub const MixFileInfo = struct {
                 const out_file = try out_dir.createFile(file_name, .{});
                 defer out_file.close();
                 log.info("extracting file {s}, offset: {}, size: {}", .{ file_name, offset, size });
-                try copy(reader, out_file.writer(), size);
+                try util.copy(reader, out_file.writer(), size);
             } else {
                 const out_file = try out_dir.createFile(file_name, .{});
                 defer out_file.close();
@@ -120,12 +120,17 @@ pub const MixFileInfo = struct {
         }
     }
     pub fn addFileEntry(self: *Self, allocator: *Allocator, file_id: u32, size: u32) !void {
-        if (size == 0) {
+        if (size == 0 or size == std.math.maxInt(u32)) {
             try self.header.files.putNoClobber(allocator, file_id, .{ .size = std.math.maxInt(u32), .offset = std.math.maxInt(u32) });
         } else {
             try self.header.files.putNoClobber(allocator, file_id, .{ .size = size, .offset = self.header.body_size });
             self.header.body_size += size;
         }
+    }
+    pub fn getFileEntry(self: Self, file_id: u32) ?MixFileEntry {
+        if (self.header.files.getEntry(file_id)) |entry| {
+            return entry.value_ptr.*;
+        } else return null;
     }
     pub fn writeTo(self: Self, writer: anytype) !void {
         try self.flags.writeTo(writer);
@@ -147,26 +152,6 @@ fn idToStr(id: u32) [NAME_PLACEHOLDER.len]u8 {
     return ret;
 }
 
-fn copy(from: anytype, to: anytype, size: usize) !void {
-    var buffer: [8192]u8 = undefined;
-    var rest = size;
-    while (rest > 0) {
-        const to_read = min(rest, buffer.len);
-        try from.readNoEof(buffer[0..to_read]);
-        rest -= to_read;
-        try to.writeAll(buffer[0..to_read]);
-    }
-}
-
-pub fn copyToEnd(from: anytype, to: anytype) !void {
-    var buffer: [8192]u8 = undefined;
-    var len = try from.read(&buffer);
-    while (len > 0) {
-        try to.writeAll(buffer[0..len]);
-        len = try from.read(&buffer);
-    }
-}
-
 fn fileIdFromName(name: []const u8) u32 {
     var i: usize = 0;
     var ret: u32 = 0;
@@ -183,13 +168,30 @@ fn fileIdFromName(name: []const u8) u32 {
     return ret;
 }
 
-pub fn getFileIdFromName(name: []const u8) u32 {
-    if (std.mem.endsWith(u8, name, ".raw_id") and name.len == NAME_PLACEHOLDER.len) {
-        return std.fmt.parseInt(u32, name[0..8], 16) catch crc32.doBlock(name);
-    } else return crc32.doBlock(name);
-}
+pub const util = struct {
+    pub fn copy(from: anytype, to: anytype, size: usize) !void {
+        var buffer: [8192]u8 = undefined;
+        var rest = size;
+        while (rest > 0) {
+            const to_read = min(rest, buffer.len);
+            try from.readNoEof(buffer[0..to_read]);
+            rest -= to_read;
+            try to.writeAll(buffer[0..to_read]);
+        }
+    }
 
-// comptime {
-//     @compileLog(fileIdFromName("RULESMO.INI"));
-//     @compileLog(crc32.doBlock("RULESMO.INI"));
-// }
+    pub fn copyToEnd(from: anytype, to: anytype) !void {
+        var buffer: [8192]u8 = undefined;
+        var len = try from.read(&buffer);
+        while (len > 0) {
+            try to.writeAll(buffer[0..len]);
+            len = try from.read(&buffer);
+        }
+    }
+
+    pub fn getFileIdFromName(name: []const u8) u32 {
+        if (std.mem.endsWith(u8, name, ".raw_id") and name.len == NAME_PLACEHOLDER.len) {
+            return std.fmt.parseInt(u32, name[0..8], 16) catch crc32.doBlock(name);
+        } else return crc32.doBlock(name);
+    }
+};
